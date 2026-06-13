@@ -4,25 +4,23 @@ import io
 from bs4 import BeautifulSoup
 import pandas as pd
 import pytz
+import streamlit as st  # ✅ Streamlit用のインポートを追加
 
 # 日本時間(JST)の設定
 JST = pytz.timezone("Asia/Tokyo")
 
+# レイアウトをワイドモードに設定
+st.set_page_config(layout="wide")
 
-def parse_html_to_dataframe(html_file_path):
-    # ① HTMLファイルを満たして解析準備
-    with open(html_file_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-
+def parse_html_to_dataframe(html_content):
+    """HTMLテキスト（文字列）を解析してデータフレームを返す関数"""
     soup = BeautifulSoup(html_content, "html.parser")
     parsed_data = []
 
-    # ② イベント1件ごとにループ処理 (liタグのlist-innerクラスを含む単位を基準にします)
-    # 構造的に、各イベントの枠組みを探索
+    # イベント1件ごとにループ処理 (liタグのlist-innerクラスを含む単位を基準にします)
     event_nodes = soup.find_all("div", class_="list-inner")
 
     for node in event_nodes:
-        # 親要素の <li> を取得することで、後半の「list-sub-box」エリアも一緒に探せるようにします
         li_parent = node.find_parent("li")
         if not li_parent:
             continue
@@ -33,12 +31,10 @@ def parse_html_to_dataframe(html_file_path):
             image_url = img_tag["src"] if img_tag else ""
 
             # --- 2. イベント名 ---
-            # tx-title クラスのテキストを取得
             title_tag = li_parent.find("p", class_="tx-title")
             event_name = title_tag.get_text(strip=True) if title_tag else ""
 
             # --- 3. イベントID ---
-            # aタグの href から "event_id=XXXX" の数字を抽出
             event_id = ""
             edit_link = li_parent.find("a", href=re.compile(r"event_id=\d+"))
             if edit_link:
@@ -50,72 +46,86 @@ def parse_html_to_dataframe(html_file_path):
             started_at_ts = ""
             ended_at_ts = ""
 
-            # 「このイベントは終了しています」が含まれるpタグを探す
             p_tags = li_parent.find_all("p", style=re.compile(r"color:\s*gray"))
             for p in p_tags:
                 text = p.get_text(strip=True)
                 if "このイベントは終了しています" in text:
-                    # 改行や文字列を無視して「YYYY/MM/DD HH:MM - YYYY/MM/DD HH:MM」のパターンを抽出
                     date_match = re.search(
                         r"(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2})\s*-\s*(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2})",
                         text,
                     )
                     if date_match:
-                        start_str = date_match.group(1)  # 例: "2022/07/25 18:00"
-                        end_str = date_match.group(2)  # 例: "2022/08/03 21:59"
+                        start_str = date_match.group(1)
+                        end_str = date_match.group(2)
 
-                        # datetimeオブジェクトに変換後、タイムスタンプに変換
-                        dt_start = datetime.strptime(
-                            start_str, "%Y/%m/%d %H:%M"
-                        )
+                        dt_start = datetime.strptime(start_str, "%Y/%m/%d %H:%M")
                         dt_end = datetime.strptime(end_str, "%Y/%m/%d %H:%M")
 
-                        # タイムゾーンをJSTとして認識させてUnixTimeに
-                        started_at_ts = int(
-                            JST.localize(dt_start).timestamp()
-                        )
+                        started_at_ts = int(JST.localize(dt_start).timestamp())
                         ended_at_ts = int(JST.localize(dt_end).timestamp())
                     break
 
-            # 5つの情報が揃っていれば（または最低限IDと名前があれば）リストに追加
+            # 5つの情報が揃っていればリストに追加
             if event_id or event_name:
                 parsed_data.append(
                     {
                         "event_id": event_id,
                         "event_name": event_name,
-                        "image_m": image_url,  # 既存ツールに合わせてimage_mに
+                        "image_m": image_url,
                         "started_at": started_at_ts,
                         "ended_at": ended_at_ts,
                     }
                 )
 
         except Exception as e:
-            # 特定の行でエラーが起きても次へ進める
             continue
 
-    # ③ 結果をデータフレーム化
     df = pd.DataFrame(parsed_data)
     return df
 
 
-# --- 実行部分 ---
-if __name__ == "__main__":
-    # 9ページ分のHTMLをまとめたファイルのパスを指定
-    html_file = "all_events.html"
+# ――― 🖥️ Streamlit 画面表示エリア ―――
+st.title("📂 過去イベントHTMLデータ一括抽出ツール")
+st.write("管理画面（オーガナイザーページ）のHTMLソースから、過去イベントの必要情報を一括でCSVに変換します。")
 
-    try:
-        result_df = parse_html_to_dataframe(html_file)
+st.markdown("---")
 
-        # 重複があれば除外
-        result_df.drop_duplicates(subset=["event_id"], inplace=True)
+# 巨大なHTMLをそのままコピペして入力できるテキストボックスを配置
+html_input = st.text_area(
+    "1. ここに9ページ分のHTMLソースを丸ごと貼り付けてください（続きのまま一括で貼り付けてOKです）",
+    height=400,
+    placeholder="<li><div class=\"list-inner\">... のようなHTMLソースをここにペーストしてください"
+)
 
-        print(f"🎉 抽出完了！ 合計: {len(result_df)} 件のイベントが見つかりました。")
+# 解析ボタン
+if st.button("2. HTMLを解析してデータを抽出する", type="primary"):
+    if html_input.strip():
+        with st.spinner("HTMLを解析中..."):
+            # 入力されたHTMLをそのまま関数に渡して解析
+            result_df = parse_html_to_dataframe(html_input)
 
-        # 手動補完がしやすいようにCSVファイルとして保存
-        result_df.to_csv("extracted_past_events.csv", index=False, encoding="utf-8-sig")
-        print("💾 'extracted_past_events.csv' として保存しました。")
+            if not result_df.empty:
+                # 重複があれば除外
+                result_df.drop_duplicates(subset=["event_id"], inplace=True)
+                
+                st.success(f"🎉 解析が完了しました！ 合計 {len(result_df)} 件のイベントを抽出しました。")
+                
+                # プレビュー表示
+                st.subheader("📊 抽出データプレビュー")
+                st.dataframe(result_df, use_container_width=True)
 
-    except FileNotFoundError:
-        print(
-            f"❌ エラー: {html_file} が見つかりません。HTMLソースをこの名前で保存してください。"
-        )
+                # ダウンロード用ボタンの作成（UTF-8 BOM付きCSV）
+                csv_bytes = result_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                
+                st.markdown("---")
+                st.download_button(
+                    label="📥 3. 抽出した過去イベントCSVをダウンロード",
+                    data=csv_bytes,
+                    file_name="extracted_past_events.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ 指定されたHTML構造（イベント情報）が見つかりませんでした。貼り付けたソースを確認してください。")
+    else:
+        st.error("❌ HTMLソースコードが入力されていません。貼り付けてからボタンを押してください。")
