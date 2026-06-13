@@ -65,12 +65,22 @@ def parse_html_to_dataframe(html_content):
                         ended_at_ts = int(JST.localize(dt_end).timestamp())
                     break
 
-            # 5つの情報が揃っていればリストに追加
+            # --- 5. 【追加】イベントURLキー (公開済みイベントページの識別子) ---
+            event_url_key = ""
+            public_link = li_parent.find("a", href=re.compile(r"^/event/[^?]+"))
+            if public_link:
+                # "/event/xxxx" の部分から "xxxx" を正規表現で取り出す
+                url_match = re.search(r"^/event/([^?#/]+)", public_link["href"])
+                if url_match:
+                    event_url_key = url_match.group(1)
+
+            # 必須項目が揃っていればリストに追加
             if event_id or event_name:
                 parsed_data.append(
                     {
                         "event_id": event_id,
                         "event_name": event_name,
+                        "event_url_key": event_url_key,  # 🚀 追加された項目
                         "image_m": image_url,
                         "started_at": started_at_ts,
                         "ended_at": ended_at_ts,
